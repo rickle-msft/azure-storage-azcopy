@@ -37,18 +37,20 @@ import (
 )
 
 type blockBlobUpload struct {
-	jptm        IJobPartTransferMgr
-	srcMmf      *common.MMF
-	source      string
-	destination string
-	blobURL     azblob.BlobURL
-	pacer       *pacer
-	blockIds    []string
+	jptm           IJobPartTransferMgr
+	srcFile        *os.File
+	source         string
+	destination    string
+	blobURL        azblob.BlobURL
+	pacer          *pacer
+	blockIds       []string
+	blobHttpHeader azblob.BlobHTTPHeaders
+	metadata       azblob.Metadata
 }
 
 type pageBlobUpload struct {
 	jptm        IJobPartTransferMgr
-	srcMmf      *common.MMF
+	srcFile     *os.File
 	source      string
 	destination string
 	blobUrl     azblob.BlobURL
@@ -105,19 +107,28 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 		return
 	}
 
-	defer srcFile.Close()
+	//defer srcFile.Close()
 
 	// 2b: Memory map the source file. If the file size if not greater than 0, then doesn't memory map the file.
-	srcMmf := &common.MMF{}
+	var blobHttpHeaders = azblob.BlobHTTPHeaders{}
+	var metaData = azblob.Metadata{}
+
 	if blobSize > 0 {
+		fileData := &common.MMF{}
+		fileDataSize := blobSize
+		if blobSize > 512 {
+			fileDataSize = 512
+		}
 		// file needs to be memory mapped only when the file size is greater than 0.
-		srcMmf, err = common.NewMMF(srcFile, false, 0, blobSize)
+		fileData, err = common.NewMMF(srcFile, false, 0, fileDataSize)
 		if err != nil {
 			jptm.LogUploadError(info.Source, info.Destination, "Memory Map Error-"+err.Error(), 0)
 			jptm.SetStatus(common.ETransferStatus.Failed())
 			jptm.ReportTransferDone()
 			return
 		}
+		blobHttpHeaders, metaData = jptm.BlobDstData(fileData)
+		fileData.Unmap()
 	}
 
 	if EndsWith(info.Source, ".vhd") && (blobSize%azblob.PageBlobPageBytes == 0) {
@@ -133,7 +144,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 			chunkSize)
 
 		// Get http headers and meta data of page.
-		blobHttpHeaders, metaData := jptm.BlobDstData(srcMmf)
+		//blobHttpHeaders, metaData := jptm.BlobDstData(srcMmf)
 
 		// Create Page Blob of the source size
 		_, err := pageBlobUrl.Create(jptm.Context(), blobSize,
@@ -145,7 +156,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 			jptm.SetStatus(common.ETransferStatus.Failed())
 			jptm.SetErrorCode(int32(status))
 			jptm.ReportTransferDone()
-			srcMmf.Unmap()
+			//srcMmf.Unmap()
 			return
 		}
 
@@ -171,7 +182,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 
 				}
 				jptm.ReportTransferDone()
-				srcMmf.Unmap()
+				//srcMmf.Unmap()
 				return
 			}
 		}
@@ -185,7 +196,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 
 		pbu := &pageBlobUpload{
 			jptm:        jptm,
-			srcMmf:      srcMmf,
+			srcFile:     srcFile,
 			source:      info.Source,
 			destination: info.Destination,
 			blobUrl:     blobUrl,
@@ -204,7 +215,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 	} else if blobSize == 0 || blobSize <= chunkSize {
 		// step 3.b: if blob size is smaller than chunk size and it is not a vhd file
 		// we should do a put blob instead of chunk up the file
-		PutBlobUploadFunc(jptm, srcMmf, blobUrl.ToBlockBlobURL(), pacer)
+		PutBlobUploadFunc(jptm, srcFile, blobUrl.ToBlockBlobURL(), pacer, blobHttpHeaders, metaData)
 		return
 	} else {
 		// step 3.c: If the source is not a vhd and size is greater than chunk Size,
@@ -227,7 +238,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 			jptm.Cancel()
 			jptm.SetStatus(common.ETransferStatus.Failed())
 			jptm.ReportTransferDone()
-			srcMmf.Unmap()
+			//srcMmf.Unmap()
 			return
 		}
 		// creating a slice to contain the blockIds
@@ -238,7 +249,7 @@ func LocalToBlockBlob(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pace
 		// Each chunk uses these details which uploading the block.
 		bbu := &blockBlobUpload{
 			jptm:        jptm,
-			srcMmf:      srcMmf,
+			srcFile:     srcFile,
 			source:      info.Source,
 			destination: info.Destination,
 			blobURL:     blobUrl,
@@ -296,7 +307,6 @@ func (bbu *blockBlobUpload) blockBlobUploadFunc(chunkId int32, startIndex int64,
 		// transfer done is internal function which marks the transfer done, unmaps the src file and close the  source file.
 		transferDone := func() {
 			bbu.jptm.Log(pipeline.LogInfo, "Transfer done")
-			bbu.srcMmf.Unmap()
 			// Get the Status of the transfer
 			// If the transfer status value < 0, then transfer failed with some failure
 			// there is a possibility that some uncommitted blocks will be there
@@ -325,6 +335,21 @@ func (bbu *blockBlobUpload) blockBlobUploadFunc(chunkId int32, startIndex int64,
 			}
 			return
 		}
+		chunkMap := &common.MMF{}
+		chunkMap, err := common.NewMMF(bbu.srcFile, false, startIndex, adjustedChunkSize)
+		if err != nil {
+			bbu.jptm.Cancel()
+			if lastChunk, _ := bbu.jptm.ReportChunkDone(); lastChunk {
+				if bbu.jptm.ShouldLog(pipeline.LogDebug) {
+					bbu.jptm.Log(pipeline.LogDebug,
+						fmt.Sprintf("Finalizing transfer cancellation"))
+				}
+				transferDone()
+			}
+			return
+		}
+		defer chunkMap.Unmap()
+		//fmt.Println("memory mapped the chunk ", chunkMap.Slice(), len(chunkMap.Slice()))
 		// step 1: generate block ID
 		blockId := common.NewUUID().String()
 		encodedBlockId := base64.StdEncoding.EncodeToString([]byte(blockId))
@@ -334,8 +359,8 @@ func (bbu *blockBlobUpload) blockBlobUploadFunc(chunkId int32, startIndex int64,
 
 		// step 3: perform put block
 		blockBlobUrl := bbu.blobURL.ToBlockBlobURL()
-		body := newRequestBodyPacer(bytes.NewReader(bbu.srcMmf.Slice()[startIndex:startIndex+adjustedChunkSize]), bbu.pacer, bbu.srcMmf)
-		_, err := blockBlobUrl.StageBlock(bbu.jptm.Context(), encodedBlockId, body, azblob.LeaseAccessConditions{})
+		body := newRequestBodyPacer(bytes.NewReader(chunkMap.Slice()), bbu.pacer, chunkMap)
+		_, err = blockBlobUrl.StageBlock(bbu.jptm.Context(), encodedBlockId, body, azblob.LeaseAccessConditions{})
 		if err != nil {
 			// check if the transfer was cancelled while Stage Block was in process.
 			if bbu.jptm.WasCanceled() {
@@ -379,10 +404,10 @@ func (bbu *blockBlobUpload) blockBlobUploadFunc(chunkId int32, startIndex int64,
 
 			// fetching the blob http headers with content-type, content-encoding attributes
 			// fetching the metadata passed with the JobPartOrder
-			blobHttpHeader, metaData := bbu.jptm.BlobDstData(bbu.srcMmf)
+			//blobHttpHeader, metaData := bbu.jptm.BlobDstData(bbu.srcMmf)
 
 			// commit the blocks.
-			_, err := blockBlobUrl.CommitBlockList(bbu.jptm.Context(), bbu.blockIds, blobHttpHeader, metaData, azblob.BlobAccessConditions{})
+			_, err := blockBlobUrl.CommitBlockList(bbu.jptm.Context(), bbu.blockIds, bbu.blobHttpHeader, bbu.metadata, azblob.BlobAccessConditions{})
 			if err != nil {
 				status, msg := ErrorEx{err}.ErrorCodeAndString()
 				bbu.jptm.LogUploadError(bbu.source, bbu.destination, "Commit block list failed "+msg, status)
@@ -414,7 +439,7 @@ func (bbu *blockBlobUpload) blockBlobUploadFunc(chunkId int32, startIndex int64,
 	}
 }
 
-func PutBlobUploadFunc(jptm IJobPartTransferMgr, srcMmf *common.MMF, blockBlobUrl azblob.BlockBlobURL, pacer *pacer) {
+func PutBlobUploadFunc(jptm IJobPartTransferMgr, srcFile *os.File, blockBlobUrl azblob.BlockBlobURL, pacer *pacer, blobHttpHeader azblob.BlobHTTPHeaders, metaData azblob.Metadata) {
 
 	// TODO: added the two operations for debugging purpose. remove later
 	// Increment a number of goroutine performing the transfer / acting on chunks msg by 1
@@ -443,11 +468,20 @@ func PutBlobUploadFunc(jptm IJobPartTransferMgr, srcMmf *common.MMF, blockBlobUr
 	//}(jptm)
 
 	// Get blob http headers and metadata.
-	blobHttpHeader, metaData := jptm.BlobDstData(srcMmf)
+	//blobHttpHeader, metaData := jptm.BlobDstData(srcMmf)
 
 	var err error
 
 	tInfo := jptm.Info()
+	srcMmf := &common.MMF{}
+	srcMmf, err = common.NewMMF(srcFile, false, 0, tInfo.SourceSize)
+	if err != nil {
+		jptm.Cancel()
+		jptm.LogUploadError(tInfo.Source, tInfo.Destination, "Error memory mapping the chunk "+err.Error(), 0)
+		jptm.SetStatus(common.ETransferStatus.Failed())
+		return
+	}
+	defer srcMmf.Unmap()
 	// take care of empty blobs
 	if tInfo.SourceSize == 0 {
 		_, err = blockBlobUrl.Upload(jptm.Context(), bytes.NewReader(nil), blobHttpHeader, metaData, azblob.BlobAccessConditions{})
@@ -493,11 +527,6 @@ func PutBlobUploadFunc(jptm IJobPartTransferMgr, srcMmf *common.MMF, blockBlobUr
 
 	// updating number of transfers done for job part order
 	jptm.ReportTransferDone()
-
-	// close the memory map
-	if jptm.Info().SourceSize != 0 {
-		srcMmf.Unmap()
-	}
 }
 
 func (pbu *pageBlobUpload) pageBlobUploadFunc(startPage int64, calculatedPageSize int64) chunkFunc {
@@ -534,7 +563,7 @@ func (pbu *pageBlobUpload) pageBlobUploadFunc(startPage int64, calculatedPageSiz
 						fmt.Sprintf("Finalizing transfer"))
 				}
 				pbu.jptm.SetStatus(common.ETransferStatus.Success())
-				pbu.srcMmf.Unmap()
+				//pbu.srcMmf.Unmap()
 				// If the value of transfer Status is less than 0
 				// transfer failed. Delete the page blob created
 				if pbu.jptm.TransferStatus() <= 0 {
@@ -548,7 +577,15 @@ func (pbu *pageBlobUpload) pageBlobUploadFunc(startPage int64, calculatedPageSiz
 				pbu.jptm.ReportTransferDone()
 			}
 		}
-
+		srcMmf := &common.MMF{}
+		srcMmf, err := common.NewMMF(pbu.srcFile, false, startPage, calculatedPageSize)
+		if err != nil {
+			pbu.jptm.LogUploadError(pbu.source, pbu.destination, "Error Memory Mapping the file "+err.Error(), 0)
+			// cancelling the transfer
+			pbu.jptm.Cancel()
+			pageDone()
+		}
+		defer srcMmf.Unmap()
 		if pbu.jptm.WasCanceled() {
 			if pbu.jptm.ShouldLog(pipeline.LogInfo) {
 				pbu.jptm.Log(pipeline.LogInfo, "Transfer Not Started since it is cancelled")
@@ -556,7 +593,7 @@ func (pbu *pageBlobUpload) pageBlobUploadFunc(startPage int64, calculatedPageSiz
 			pageDone()
 		} else {
 			// pageBytes is the byte slice of Page for the given page range
-			pageBytes := pbu.srcMmf.Slice()[startPage : startPage+calculatedPageSize]
+			pageBytes := srcMmf.Slice()
 			// converted the bytes slice to int64 array.
 			// converting each of 8 bytes of byteSlice to an integer.
 			int64Slice := (*(*[]int64)(unsafe.Pointer(&pageBytes)))[:len(pageBytes)/8]
@@ -584,7 +621,7 @@ func (pbu *pageBlobUpload) pageBlobUploadFunc(startPage int64, calculatedPageSiz
 				return
 			}
 
-			body := newRequestBodyPacer(bytes.NewReader(pageBytes), pbu.pacer, pbu.srcMmf)
+			body := newRequestBodyPacer(bytes.NewReader(pageBytes), pbu.pacer, srcMmf)
 			pageBlobUrl := pbu.blobUrl.ToPageBlobURL()
 			_, err := pageBlobUrl.UploadPages(pbu.jptm.Context(), startPage, body, azblob.BlobAccessConditions{})
 			if err != nil {
