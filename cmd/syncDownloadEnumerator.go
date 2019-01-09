@@ -256,9 +256,9 @@ func (e *syncDownloadEnumerator) listTheDestinationIfRequired(cca *cookedSyncCmd
 	var isSourceASingleFile os.FileInfo = nil
 
 	if len(listOfFilesAndDir) == 0 {
-		fInfo, fError := os.Stat(listOfFilesAndDir[0])
+		fInfo, fError := os.Stat(cca.destination)
 		if fError != nil {
-			return false, fmt.Errorf("cannot get the information of the %s. Failed with error %s", listOfFilesAndDir[0], fError)
+			return false, fmt.Errorf("cannot scan the destination %s. Failed with error %s", cca.destination, fError)
 		}
 		if fInfo.Mode().IsRegular() {
 			isSourceASingleFile = fInfo
