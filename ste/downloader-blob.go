@@ -21,10 +21,11 @@
 package ste
 
 import (
+	"net/url"
+
 	"github.com/Azure/azure-pipeline-go/pipeline"
 	"github.com/Azure/azure-storage-azcopy/common"
 	"github.com/Azure/azure-storage-blob-go/azblob"
-	"net/url"
 )
 
 type blobDownloader struct{}
@@ -58,7 +59,7 @@ func (bd *blobDownloader) GenerateDownloadFunc(jptm IJobPartTransferMgr, srcPipe
 		jptm.LogChunkStatus(id, common.EWaitReason.HeaderResponse())
 		get, err := srcBlobURL.Download(jptm.Context(), id.OffsetInFile, length, azblob.BlobAccessConditions{}, false)
 		if err != nil {
-			jptm.FailActiveDownload(err) // cancel entire transfer because this chunk has failed
+			jptm.FailActiveDownload("Downloading response body", err) // cancel entire transfer because this chunk has failed
 			return
 		}
 
@@ -73,7 +74,7 @@ func (bd *blobDownloader) GenerateDownloadFunc(jptm IJobPartTransferMgr, srcPipe
 		defer retryReader.Close()
 		err = destWriter.EnqueueChunk(jptm.Context(), retryForcer, id, length, newLiteResponseBodyPacer(retryReader, pacer))
 		if err != nil {
-			jptm.FailActiveDownload(err)
+			jptm.FailActiveDownload("Enqueuing chunk", err)
 			return
 		}
 	}
