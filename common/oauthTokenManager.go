@@ -112,9 +112,6 @@ func (uotm *UserOAuthTokenManager) GetTokenInfo(ctx context.Context) (*OAuthToke
 		return nil, errors.New("invalid state, cannot get valid token info")
 	}
 
-	if tokenInfo.ClientID == "" {
-		tokenInfo.ClientID = ApplicationID
-	}
 	return tokenInfo, nil
 }
 
@@ -449,9 +446,11 @@ func (credInfo *OAuthTokenInfo) RefreshTokenWithUserCredential(ctx context.Conte
 		return nil, err
 	}
 
+	// ClientID in credInfo is optional which is used for internal integration only.
+	// Use AzCopy's 1st party applicationID for refresh by default.
 	spt, err := adal.NewServicePrincipalTokenFromManualToken(
 		*oauthConfig,
-		credInfo.ClientID,
+		IffString(credInfo.ClientID != "", credInfo.ClientID, ApplicationID),
 		Resource,
 		credInfo.Token)
 	if err != nil {

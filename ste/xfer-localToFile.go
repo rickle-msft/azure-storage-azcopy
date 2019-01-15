@@ -31,7 +31,7 @@ import (
 
 	"github.com/Azure/azure-pipeline-go/pipeline"
 	"github.com/Azure/azure-storage-azcopy/common"
-	"github.com/Azure/azure-storage-file-go/2017-07-29/azfile"
+	"github.com/Azure/azure-storage-file-go/azfile"
 )
 
 func LocalToFile(jptm IJobPartTransferMgr, p pipeline.Pipeline, pacer *pacer) {
@@ -249,7 +249,7 @@ func fileUploadFunc(jptm IJobPartTransferMgr, srcFile *os.File, fileURL azfile.F
 			}
 
 			body := newRequestBodyPacer(bytes.NewReader(rangeBytes), pacer, srcMMF)
-			_, err := fileURL.UploadRange(jptm.Context(), startRange, body)
+			_, err := fileURL.UploadRange(jptm.Context(), startRange, body, nil)
 			if err != nil {
 				if jptm.WasCanceled() {
 					if jptm.ShouldLog(pipeline.LogDebug) {
