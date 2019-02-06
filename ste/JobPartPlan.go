@@ -43,6 +43,10 @@ type JobPartPlanHeader struct {
 	StartTime           int64              // The start time of this part
 	JobID               common.JobID       // Job Part's JobID
 	PartNum             common.PartNumber  // Job Part's part number (0+)
+	SourceRootLength    uint16             // The length of the source root path
+	SourceRoot          [1000]byte         // The root directory of the source
+	DestinationRootLength uint16           // The length of the destination root path
+	DestinationRoot     [1000]byte         // The root directory of the destination
 	IsFinalPart         bool               // True if this is the Job's last part; else false
 	ForceWrite          bool               // True if the existing blobs needs to be overwritten.
 	Priority            common.JobPriority // The Job Part's priority

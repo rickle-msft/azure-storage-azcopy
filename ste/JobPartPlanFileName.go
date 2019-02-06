@@ -135,6 +135,8 @@ func (jpfn JobPartPlanFileName) Create(order common.CopyJobPartOrderRequest) {
 		StartTime:           time.Now().UnixNano(),
 		JobID:               order.JobID,
 		PartNum:             order.PartNum,
+		SourceRootLength:    uint16(len(order.SourceRoot)),
+		DestinationRootLength: uint16(len(order.DestinationRoot)),
 		IsFinalPart:         order.IsFinalPart,
 		ForceWrite:          order.ForceWrite,
 		Priority:            order.Priority,
@@ -160,6 +162,8 @@ func (jpfn JobPartPlanFileName) Create(order common.CopyJobPartOrderRequest) {
 	}
 
 	// Copy any strings into their respective fields
+	copy(jpph.SourceRoot[:], order.SourceRoot)
+	copy(jpph.DestinationRoot[:], order.DestinationRoot)
 	copy(jpph.DstBlobData.ContentType[:], order.BlobAttributes.ContentType)
 	copy(jpph.DstBlobData.ContentEncoding[:], order.BlobAttributes.ContentEncoding)
 	copy(jpph.DstBlobData.Metadata[:], order.BlobAttributes.Metadata)
@@ -225,7 +229,18 @@ func (jpfn JobPartPlanFileName) Create(order common.CopyJobPartOrderRequest) {
 			jppt.SrcCacheControlLength + jppt.SrcContentMD5Length + jppt.SrcMetadataLength + jppt.SrcBlobTypeLength)
 	}
 
-	// All the transfers were written; now write each each transfer's src/dst strings
+	// All the transfers were written; now write each transfer's src/dst strings
+	//TODORick: Write the src root and dst root first (or put it in the header? I think it's better here because the
+	// header seems to be statically sized and this part has some dynamic sizing), then trim the prefixes before writing.
+	// Where to read? Wherever Transfers are being processed. Maybe wherever Parse() gets called?
+	/*bytesWritten, err = file.WriteString(order.SourceRoot)
+	common.PanicIfErr(err)
+	eof += int64(bytesWritten)
+
+	bytesWritten, err = file.WriteString(order.DestinationRoot)
+	common.PanicIfErr(err)
+	eof += int64(bytesWritten)*/
+
 	for t := range order.Transfers {
 		// Sanity check: Verify that we are were we think we are and that no bug has occurred
 		if eof != srcDstStringsOffset[t] {

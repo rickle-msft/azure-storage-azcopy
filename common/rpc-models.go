@@ -52,6 +52,9 @@ type CopyJobPartOrderRequest struct {
 	Exclude     map[string]int
 	// list of blobTypes to exclude.
 	ExcludeBlobType []azblob.BlobType
+	// TODORICK:
+	SourceRoot string
+	DestinationRoot string
 	Transfers       []CopyTransfer
 	LogLevel        LogLevel
 	BlobAttributes  BlobTransferAttributes

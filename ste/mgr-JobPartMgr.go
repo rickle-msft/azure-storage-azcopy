@@ -266,6 +266,9 @@ func (jpm *jobPartMgr) ScheduleTransfers(jobCtx context.Context) {
 
 	jpm.createPipeline(jobCtx) // pipeline is created per job part manager
 
+	// TODORICK: Read the source root and destination root from the plan file then append it as necessary.
+	// Can look at plan.TransferSrcDstStrings for technical details. Should actually have plan.TransferSrcDstStrings do
+	// the appending internally. Then everything just works.
 	// *** Schedule this job part's transfers ***
 	for t := uint32(0); t < plan.NumTransfers; t++ {
 		jppt := plan.Transfer(t)
