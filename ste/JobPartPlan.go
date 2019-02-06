@@ -14,7 +14,7 @@ import (
 // dataSchemaVersion defines the data schema version of JobPart order files supported by
 // current version of azcopy
 // To be Incremented every time when we release azcopy with changed dataSchema
-const DataSchemaVersion common.Version = 1
+const DataSchemaVersion common.Version = 2
 
 const (
 	ContentTypeMaxBytes     = 256  // If > 65536, then jobPartPlanBlobData's ContentTypeLength's type  field must change
@@ -101,6 +101,9 @@ func (jpph *JobPartPlanHeader) CommandString() string {
 
 // TransferSrcDstDetail returns the source and destination string for a transfer at given transferIndex in JobPartOrder
 func (jpph *JobPartPlanHeader) TransferSrcDstStrings(transferIndex uint32) (source, destination string) {
+	srcRoot := string(jpph.SourceRoot[:jpph.SourceRootLength])
+	dstRoot := string(jpph.DestinationRoot[:jpph.DestinationRootLength])
+
 	jppt := jpph.Transfer(transferIndex)
 
 	srcSlice := []byte{}
@@ -115,7 +118,7 @@ func (jpph *JobPartPlanHeader) TransferSrcDstStrings(transferIndex uint32) (sour
 	sh.Len = int(jppt.DstLength)
 	sh.Cap = sh.Len
 
-	return string(srcSlice), string(dstSlice)
+	return srcRoot + string(srcSlice), dstRoot + string(dstSlice)
 }
 
 func (jpph *JobPartPlanHeader) getString(offset int64, length int16) string {
